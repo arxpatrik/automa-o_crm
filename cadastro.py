@@ -191,8 +191,8 @@ class AutomationApp:
 
         # ── Confirmação: aguarda #wallmessages sumir ─────────────────────────
         try:
-            self.page.wait_for_selector("#wallmessages", state="visible", timeout=5000)
-            self.page.wait_for_timeout(1000)  # pequena pausa extra para terminar de renderizar
+            self.page.wait_for_selector("#wallmessages", state="hidden", timeout=5000)
+            self.log("[PASSO] Modal confirmado como fechado.")
         except:
             self.log("[AVISO] wallmessages ainda visível. Tentando Escape adicional...")
             self.page.keyboard.press("Escape")
@@ -282,6 +282,7 @@ class AutomationApp:
                 # ── Ação ─────────────────────────────────────────────────────
                 if item_correspondente:
                     nome_comp = item_correspondente['nome_completo']
+                    FALLBACK_NOME = "Patrik Mateus da Silva Dias"
                     self.log(f"[PASSO] Transferindo para: {nome_comp}")
                     
                     self.page.locator("#modal_negotiation_responsible_name").click()
@@ -293,7 +294,19 @@ class AutomationApp:
                     search_input = secao_usuario.locator("div.fs-search input")
                     search_input.wait_for(state="visible")
                     search_input.fill(nome_comp)
-                    secao_usuario.locator("div.fs-option").filter(has_text=nome_comp).first.click()
+                    self.page.wait_for_timeout(1000)  # aguarda resultados carregarem
+
+                    opcao = secao_usuario.locator("div.fs-option").filter(has_text=nome_comp)
+                    if opcao.count() > 0:
+                        opcao.first.click()
+                        self.log(f"[PASSO] Usuário '{nome_comp}' selecionado.")
+                    else:
+                        self.log(f"[AVISO] '{nome_comp}' não encontrado. Usando fallback: {FALLBACK_NOME}")
+                        search_input.clear()
+                        search_input.fill(FALLBACK_NOME)
+                        self.page.wait_for_timeout(1000)
+                        secao_usuario.locator("div.fs-option").filter(has_text=FALLBACK_NOME).first.click()
+                        self.log(f"[PASSO] Fallback '{FALLBACK_NOME}' selecionado.")
                     
                     self.page.locator("#changeResponsibleQttn").click()
                     self.page.wait_for_timeout(1500)
@@ -302,12 +315,38 @@ class AutomationApp:
                     try:
                         alerta = self.page.locator("h3:has-text('Atenção')")
                         if alerta.is_visible(timeout=3000):
-                            self.log("[ALERTA] Transferência impedida. Fechando alerta.")
+                            self.log("[ALERTA] Transferência impedida (já em atendimento).")
+                            # 1. Fecha o pop-up de alerta
                             self.page.locator("button.closeModalAlert").first.click()
                             self.page.wait_for_timeout(1000)
-                            alerta_impediu = True
-                    except:
-                        pass
+                            # 2. Fecha o modal de Trocar Responsável
+                            fechou_modal = False
+                            try:
+                                btn_cancel = self.page.locator("#cancelChangePlan")
+                                btn_cancel.wait_for(state="visible", timeout=3000)
+                                btn_cancel.click()
+                                self.log("[PASSO] Modal fechado via #cancelChangePlan.")
+                                fechou_modal = True
+                            except:
+                                pass
+                            if not fechou_modal:
+                                # Clique fora do modal (no backdrop) para fechá-lo
+                                try:
+                                    backdrop = self.page.locator("div.modal-backdrop")
+                                    if backdrop.is_visible(timeout=1500):
+                                        backdrop.click()
+                                        self.log("[PASSO] Modal fechado via clique no backdrop.")
+                                        fechou_modal = True
+                                except:
+                                    pass
+                            if not fechou_modal:
+                                # Último recurso: clique nas coordenadas do canto superior esquerdo (fora do modal)
+                                self.page.mouse.click(10, 300)
+                                self.log("[PASSO] Modal fechado via clique fora (coordenadas).")
+                            self.page.wait_for_timeout(800)
+                            alerta_impediu = True  # sempre avança
+                    except Exception as e:
+                        self.log(f"[ERRO] Falha ao fechar alerta: {e}")
 
                     self._fechar_card()
 
