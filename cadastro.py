@@ -214,7 +214,9 @@ class AutomationApp:
             self.log(f"[INFO] {len(dados_json)} registros carregados.")
             
             seletor_cards = "#ppl_received section.pwrcrm-card.card-simple"
+            seletor_coluna = "#ppl_received"
             indice_card = 0
+            ciclo = 1
         
             while self.executando:
                 while self.pausado:
@@ -222,7 +224,7 @@ class AutomationApp:
                     if not self.executando: break
                 if not self.executando: break
 
-                self.log(f"\n--- [PASSO] CARD ÍNDICE {indice_card} ---")
+                self.log(f"\n--- [PASSO] CARD ÍNDICE {indice_card} (ciclo {ciclo}) ---")
                 try:
                     self.page.wait_for_selector(seletor_cards, timeout=5000)
                 except:
@@ -233,13 +235,43 @@ class AutomationApp:
                 total_cards = cards.count()
                 
                 if indice_card >= total_cards:
-                    self.log(f"[INFO] Todos os {total_cards} cards analisados.")
-                    break
+                    # Tentar rolar a coluna para baixo para carregar mais cards
+                    self.log(f"[INFO] Índice {indice_card} atingiu limite ({total_cards} visíveis). Rolando para carregar mais...")
+                    coluna = self.page.locator(seletor_coluna)
+                    try:
+                        coluna.evaluate("el => el.scrollTop += 1500")
+                    except:
+                        self.page.evaluate("window.scrollBy(0, 1500)")
+                    self.page.wait_for_timeout(2000)
+
+                    novo_total = self.page.locator(seletor_cards).count()
+                    if novo_total > total_cards:
+                        self.log(f"[INFO] Novos cards carregados: {novo_total} (eram {total_cards}). Continuando...")
+                        continue  # volta ao topo do loop com o mesmo indice_card
+                    else:
+                        # Sem novos cards — reinicia do início
+                        self.log(f"\n{'='*50}")
+                        self.log(f"[INFO] Fim do ciclo {ciclo}. Reiniciando do topo da fila...")
+                        self.log(f"{'='*50}\n")
+                        # Rolar de volta ao topo da coluna
+                        try:
+                            coluna.evaluate("el => el.scrollTop = 0")
+                        except:
+                            pass
+                        self.page.wait_for_timeout(3000)
+                        indice_card = 0
+                        ciclo += 1
+                        continue
 
                 card = cards.nth(indice_card)
                 if not card.is_visible():
-                    self.log(f"[PASSO] Card {indice_card} não visível.")
-                    break
+                    self.log(f"[PASSO] Card {indice_card} não visível. Rolando para visualizar...")
+                    try:
+                        card.scroll_into_view_if_needed()
+                        self.page.wait_for_timeout(500)
+                    except:
+                        indice_card += 1
+                        continue
                 
                 self.log(f"[PASSO] Abrindo card {indice_card + 1}/{total_cards}...")
                 card.scroll_into_view_if_needed()
@@ -294,7 +326,7 @@ class AutomationApp:
                     search_input = secao_usuario.locator("div.fs-search input")
                     search_input.wait_for(state="visible")
                     search_input.fill(nome_comp)
-                    self.page.wait_for_timeout(1000)  # aguarda resultados carregarem
+                    self.page.wait_for_timeout(1000)
 
                     opcao = secao_usuario.locator("div.fs-option").filter(has_text=nome_comp)
                     if opcao.count() > 0:
@@ -330,7 +362,6 @@ class AutomationApp:
                             except:
                                 pass
                             if not fechou_modal:
-                                # Clique fora do modal (no backdrop) para fechá-lo
                                 try:
                                     backdrop = self.page.locator("div.modal-backdrop")
                                     if backdrop.is_visible(timeout=1500):
@@ -340,21 +371,19 @@ class AutomationApp:
                                 except:
                                     pass
                             if not fechou_modal:
-                                # Último recurso: clique nas coordenadas do canto superior esquerdo (fora do modal)
                                 self.page.mouse.click(10, 300)
                                 self.log("[PASSO] Modal fechado via clique fora (coordenadas).")
                             self.page.wait_for_timeout(800)
-                            alerta_impediu = True  # sempre avança
+                            alerta_impediu = True
                     except Exception as e:
                         self.log(f"[ERRO] Falha ao fechar alerta: {e}")
 
                     self._fechar_card()
 
                     if alerta_impediu:
-                        indice_card += 1  # card não saiu da fila, avança
+                        indice_card += 1
                     else:
                         self.log("[INFO] Transferência OK. Card saiu da fila, índice mantido.")
-                        # índice NÃO avança — próximo card desce para mesma posição
 
                 else:
                     self.log("[INFO] Sem match. Fechando e avançando.")
@@ -362,8 +391,6 @@ class AutomationApp:
                     indice_card += 1
 
                 self.page.wait_for_timeout(1000)
-
-            self.root.after(0, lambda: messagebox.showinfo("Fim", "Processo concluído!"))
 
         except Exception as e:
             msg_erro = str(e)
