@@ -3,12 +3,13 @@ from tkinter import messagebox
 import threading
 from playwright.sync_api import sync_playwright
 import json
+import re
 
 class AutomationApp:
     def __init__(self, root):
         self.root = root
         self.root.title("Controle Playwright")
-        self.root.geometry("400x320") #
+        self.root.geometry("450x650")
 
         self.playwright = None
         self.browser = None
@@ -38,8 +39,21 @@ class AutomationApp:
                                     command=self.alternar_pausa, state=tk.DISABLED, bg="#fff3cd", width=25)
         self.btn_pausar.pack(pady=5)
 
+        self.btn_debug = tk.Button(root, text="Debugger (Breakpoint)",
+                                   command=lambda: breakpoint(), bg="#ffebcc", width=25)
+        self.btn_debug.pack(pady=5)
+
         self.btn_fechar = tk.Button(root, text="Fechar Navegador", command=self.thread_fechar, fg="red")
-        self.btn_fechar.pack(pady=20)
+        self.btn_fechar.pack(pady=10)
+
+        lb_log = tk.Label(root, text="Log de Processos:", font=("Arial", 10, "bold"))
+        lb_log.pack(pady=(10, 0))
+
+        self.log_text = tk.Text(root, height=12, width=50, state=tk.DISABLED, bg="#f8f9fa", font=("Consolas", 9))
+        self.log_text.pack(padx=10, pady=5)
+
+        self.scrollbar = tk.Scrollbar(root, command=self.log_text.yview)
+        self.log_text.config(yscrollcommand=self.scrollbar.set)
 
     def _playwright_worker(self):
         while True:
@@ -61,12 +75,21 @@ class AutomationApp:
             self._cmd_queue.append(cmd)
         self._cmd_event.set()
 
+    def log(self, mensagem):
+        def _append():
+            self.log_text.config(state=tk.NORMAL)
+            self.log_text.insert(tk.END, f"{mensagem}\n")
+            self.log_text.see(tk.END)
+            self.log_text.config(state=tk.DISABLED)
+        print(mensagem)
+        self.root.after(0, _append)
+
     def alternar_pausa(self):
         self.pausado = not self.pausado
         texto = "Retomar Automação" if self.pausado else "Pausar Automação"
         cor = "#d1ffd1" if self.pausado else "#fff3cd"
         self.btn_pausar.config(text=texto, bg=cor)
-        print(f"[STATUS] {'PAUSADO' if self.pausado else 'RETOMADO'}")
+        self.log(f"[STATUS] {'PAUSADO' if self.pausado else 'RETOMADO'}")
 
     def thread_abrir_site(self):
         self.btn_abrir.config(state=tk.DISABLED)
@@ -84,106 +107,222 @@ class AutomationApp:
         self._enqueue(self._fechar_browser)
 
     def _abrir_site(self):
-        print("\n[DEBUG] Iniciando Navegador...")
+        self.log("\n[DEBUG] 1. Iniciando Navegador Playwright...")
         self.playwright = sync_playwright().start()
         self.browser = self.playwright.chromium.launch(headless=False, args=["--start-maximized"])
+        
+        self.log("[DEBUG] 2. Criando nova página...")
         self.page = self.browser.new_page(no_viewport=True)
+        
+        self.log("[DEBUG] 3. Navegando para app.powercrm.com.br...")
         self.page.goto("https://app.powercrm.com.br/")
         self.page.wait_for_selector("#emailField")
+        
+        self.log(f"[DEBUG] 4. Preenchendo login...")
         self.page.locator("#emailField").fill("arx.patrik@gmail.com")
         self.page.locator("#j_password").fill("Arx2025")
+        
+        self.log("[DEBUG] 5. Clicando em Logar...")
         self.page.locator("input.btn_logar").click()
-        self.page.wait_for_selector("#ppl_negotiation", timeout=30000)
+        
+        self.log("[DEBUG] 6. Aguardando carregamento do painel...")
+        self.page.wait_for_selector("#ppl_received", timeout=30000)
+        
+        self.log("[DEBUG] 7. Login concluído!")
         self.root.after(0, lambda: self.btn_rodar.config(state=tk.NORMAL))
         self.root.after(0, lambda: messagebox.showinfo("Info", "Login realizado!"))
+
+    def _fechar_card(self):
+        """
+        Fecha o modal da negociação usando o botão exato identificado via XPath.
+        Estratégias em ordem de prioridade:
+          1. button[data-dismiss='modal'][aria-label='Close']  dentro de .content-close-modal
+          2. XPath absoluto fornecido
+          3. Escape como último recurso
+        Confirma fechamento aguardando #wallmessages ficar oculto.
+        """
+        self.log("[PASSO] Fechando modal da negociação...")
+
+        fechou = False
+
+        # ── Estratégia 1: seletor CSS confiável pelo atributo do botão ──────
+        try:
+            btn = self.page.locator(
+                "div.content-close-modal button[data-dismiss='modal'][aria-label='Close']"
+            ).first
+            if btn.is_visible(timeout=2000):
+                btn.click()
+                self.log("[PASSO] Modal fechado via CSS (content-close-modal button).")
+                fechou = True
+        except:
+            pass
+
+        # ── Estratégia 2: XPath absoluto exato ──────────────────────────────
+        if not fechou:
+            try:
+                btn_xpath = self.page.locator(
+                    "xpath=/html/body/div[7]/div/div/div/div/div[1]/div/div[2]/div[2]/button"
+                ).first
+                if btn_xpath.is_visible(timeout=2000):
+                    btn_xpath.click()
+                    self.log("[PASSO] Modal fechado via XPath absoluto.")
+                    fechou = True
+            except:
+                pass
+
+        # ── Estratégia 3: XPath do pai (div[2]) — clicar no container ───────
+        if not fechou:
+            try:
+                div_xpath = self.page.locator(
+                    "xpath=/html/body/div[7]/div/div/div/div/div[1]/div/div[2]/div[2]"
+                ).first
+                if div_xpath.is_visible(timeout=2000):
+                    # Clica no botão filho dentro do container
+                    div_xpath.locator("button").first.click()
+                    self.log("[PASSO] Modal fechado via XPath do container pai.")
+                    fechou = True
+            except:
+                pass
+
+        # ── Estratégia 4: Escape como fallback ──────────────────────────────
+        if not fechou:
+            self.log("[AVISO] Nenhum botão encontrado. Usando Escape...")
+            self.page.keyboard.press("Escape")
+
+        # ── Confirmação: aguarda #wallmessages sumir ─────────────────────────
+        try:
+            self.page.wait_for_selector("#wallmessages", state="visible", timeout=5000)
+            self.page.wait_for_timeout(1000)  # pequena pausa extra para terminar de renderizar
+        except:
+            self.log("[AVISO] wallmessages ainda visível. Tentando Escape adicional...")
+            self.page.keyboard.press("Escape")
+            self.page.wait_for_timeout(1500)
+
+        self.page.wait_for_timeout(800)
+
+    def _normalizar_texto(self, texto):
+        texto = texto.lower()
+        texto = re.sub(r'\s+', ' ', texto).strip()
+        return texto
 
     def _executar_tarefa_em_loop(self):
         if not self.page: return
         try:
+            self.log("[PASSO] Abrindo arquivo lista.json...")
             with open('lista.json', 'r', encoding='utf-8') as f:
                 dados_json = json.load(f)
+            self.log(f"[INFO] {len(dados_json)} registros carregados.")
             
-            seletor_cards = "#ppl_negotiation section.pwrcrm-card.card-simple" #
-            
+            seletor_cards = "#ppl_received section.pwrcrm-card.card-simple"
+            indice_card = 0
+        
             while self.executando:
                 while self.pausado:
                     self.page.wait_for_timeout(500)
                     if not self.executando: break
-                
                 if not self.executando: break
 
-                print("\n--- [DEBUG] ANALISANDO TOPO DA FILA ---")
-                self.page.wait_for_selector(seletor_cards)
-                card = self.page.locator(seletor_cards).nth(0) #
+                self.log(f"\n--- [PASSO] CARD ÍNDICE {indice_card} ---")
+                try:
+                    self.page.wait_for_selector(seletor_cards, timeout=5000)
+                except:
+                    self.log("[PASSO] Nenhum card visível.")
+                    break
+
+                cards = self.page.locator(seletor_cards)
+                total_cards = cards.count()
                 
+                if indice_card >= total_cards:
+                    self.log(f"[INFO] Todos os {total_cards} cards analisados.")
+                    break
+
+                card = cards.nth(indice_card)
                 if not card.is_visible():
-                    print("[DEBUG] Fila concluída.")
+                    self.log(f"[PASSO] Card {indice_card} não visível.")
                     break
                 
+                self.log(f"[PASSO] Abrindo card {indice_card + 1}/{total_cards}...")
                 card.scroll_into_view_if_needed()
                 card.click()
 
-                # Aguarda histórico de mensagens
-                self.page.wait_for_selector("#wallmessages", timeout=10000)
-                self.page.wait_for_timeout(2000)
+                try:
+                    self.page.wait_for_selector("#wallmessages", timeout=10000)
+                    self.page.wait_for_timeout(2000)
+                except:
+                    self.log("[ERRO] Histórico não carregou. Fechando e pulando.")
+                    self._fechar_card()
+                    indice_card += 1
+                    continue
 
-                mensagens_locators = self.page.locator("#wallmessages div[data-type='2']") #
+                # ── Busca de match ───────────────────────────────────────────
+                mensagens_locators = self.page.locator("#wallmessages div[data-type='2']")
                 item_correspondente = None
+                total_msg = mensagens_locators.count()
+                self.log(f"[INFO] Mensagens tipo 2: {total_msg}")
                 
-                for j in range(mensagens_locators.count()):
-                    texto_raw = mensagens_locators.nth(j).inner_text().lower()
-                    texto_limpo = " ".join(texto_raw.split())
-                    
+                for j in range(total_msg):
+                    texto_raw = mensagens_locators.nth(j).inner_text()
+                    texto_limpo = self._normalizar_texto(texto_raw)
+                    self.log(f"[DEBUG] msg {j}: {texto_limpo[:120]}...")
+
                     for item in dados_json:
                         nome_trat = item['nome_tratamento'].lower().strip()
-                        
-                        # Construção da frase exata solicitada
-                        frase_completa = f"carlos eduardo de souza alonso a negociação foi transferida de {nome_trat} para julliane thaíssa capuchinho andrade em uma ação em massa"
-                        
-                        if frase_completa in texto_limpo:
-                            print(f"[MATCH CONFIRMADO] Usuário: {nome_trat}") #
+                        padrao = (
+                            r"a negociação foi transferida de\s+"
+                            + re.escape(nome_trat)
+                            + r"\s+para julliane\s+tha[ií]ssa\s+capuchinho\s+andrade\s+em uma ação em massa"
+                        )
+                        if re.search(padrao, texto_limpo):
+                            self.log(f"[MATCH] {nome_trat}")
                             item_correspondente = item
                             break
-                    if item_correspondente: break
+                    if item_correspondente:
+                        break
 
+                # ── Ação ─────────────────────────────────────────────────────
                 if item_correspondente:
                     nome_comp = item_correspondente['nome_completo']
-                    self.page.locator("#modal_negotiation_info_responsible").click() #
+                    self.log(f"[PASSO] Transferindo para: {nome_comp}")
                     
-                    # Isolar seção do usuário para evitar erro de múltiplos labels
-                    secao_usuario = self.page.locator("aside:has-text('Para o usuário:')") #
-                    secao_usuario.locator("div.fs-label").first.click() #
+                    self.page.locator("#modal_negotiation_responsible_name").click()
+                    self.log("[PASSO] Botão de transferência clicado.")
+                    
+                    secao_usuario = self.page.locator("aside:has-text('Para o usuário:')")
+                    secao_usuario.locator("div.fs-label").first.click()
 
-                    search_input = secao_usuario.locator("div.fs-search input") #
+                    search_input = secao_usuario.locator("div.fs-search input")
                     search_input.wait_for(state="visible")
-                    search_input.fill(nome_comp) #
+                    search_input.fill(nome_comp)
+                    secao_usuario.locator("div.fs-option").filter(has_text=nome_comp).first.click()
                     
-                    secao_usuario.locator("div.fs-option").filter(has_text=nome_comp).first.click() #
-                    
-                    # Botão Transferir
                     self.page.locator("#changeResponsibleQttn").click()
+                    self.page.wait_for_timeout(1500)
 
-                    # Verificação de Alerta de Atenção (Caso alguém já esteja atendendo)
-                    alerta = self.page.locator("h3:has-text('Atenção')") #
+                    alerta_impediu = False
                     try:
+                        alerta = self.page.locator("h3:has-text('Atenção')")
                         if alerta.is_visible(timeout=3000):
-                            print("[ALERTA] Atenção detectada. Fechando aviso.")
-                            self.page.locator("button.closeModalAlert").first.click() #
+                            self.log("[ALERTA] Transferência impedida. Fechando alerta.")
+                            self.page.locator("button.closeModalAlert").first.click()
                             self.page.wait_for_timeout(1000)
+                            alerta_impediu = True
                     except:
                         pass
 
-                # Fechamento do card (X no topo direito)
-                xpath_fechar = "xpath=/html/body/div[7]/div/div/div/div/div[1]/div/div[2]/div[2]/button"
-                try:
-                    btn_fechar = self.page.locator(xpath_fechar)
-                    btn_fechar.wait_for(state="visible", timeout=3000)
-                    btn_fechar.click()
-                except:
-                    self.page.keyboard.press("Escape")
-                
-                print("[DEBUG] Próximo card em 2 segundos...")
-                self.page.wait_for_timeout(2000)
+                    self._fechar_card()
+
+                    if alerta_impediu:
+                        indice_card += 1  # card não saiu da fila, avança
+                    else:
+                        self.log("[INFO] Transferência OK. Card saiu da fila, índice mantido.")
+                        # índice NÃO avança — próximo card desce para mesma posição
+
+                else:
+                    self.log("[INFO] Sem match. Fechando e avançando.")
+                    self._fechar_card()
+                    indice_card += 1
+
+                self.page.wait_for_timeout(1000)
 
             self.root.after(0, lambda: messagebox.showinfo("Fim", "Processo concluído!"))
 
