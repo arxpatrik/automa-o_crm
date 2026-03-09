@@ -292,23 +292,34 @@ class AutomationApp:
                 total_msg = mensagens_locators.count()
                 self.log(f"[INFO] Mensagens tipo 2: {total_msg}")
                 
+                # Padrão com \s* para tolerar 'alonsoa' (sem espaço no texto do CRM)
+                # Captura o nome variável (grupo 1) entre 'transferida de' e 'para julliane'
+                padrao_extracao = re.compile(
+                    r"carlos eduardo de souza alonso\s*"
+                    r"a negociação foi transferida de\s+(.+?)\s+"
+                    r"para julliane\s+tha[ií]ssa\s+capuchinho\s+andrade",
+                    re.IGNORECASE
+                )
+
                 for j in range(total_msg):
                     texto_raw = mensagens_locators.nth(j).inner_text()
                     texto_limpo = self._normalizar_texto(texto_raw)
                     self.log(f"[DEBUG] msg {j}: {texto_limpo[:120]}...")
 
-                    for item in dados_json:
-                        nome_trat = item['nome_tratamento'].lower().strip()
-                        padrao = (
-                            r"a negociação foi transferida de\s+"
-                            + re.escape(nome_trat)
-                            + r"\s+para julliane\s+tha[ií]ssa\s+capuchinho\s+andrade\s+em uma ação em massa"
-                        )
-                        if re.search(padrao, texto_limpo):
-                            self.log(f"[MATCH] {nome_trat}")
-                            item_correspondente = item
-                            break
-                    if item_correspondente:
+                    m = padrao_extracao.search(texto_limpo)
+                    if m:
+                        nome_extraido = m.group(1).strip().lower()
+                        self.log(f"[MATCH] Nome extraído da mensagem: '{nome_extraido}'")
+                        # Busca o item no JSON pelo nome_tratamento
+                        for item in dados_json:
+                            if item['nome_tratamento'].lower().strip() == nome_extraido:
+                                item_correspondente = item
+                                self.log(f"[MATCH] Item JSON encontrado: {item['nome_completo']}")
+                                break
+                        if not item_correspondente:
+                            self.log(f"[AVISO] '{nome_extraido}' não encontrado no JSON. Será usado fallback na transferência.")
+                            # Cria um item genérico para acionar o fluxo de transferência (o fallback cuidará do nome_completo)
+                            item_correspondente = {"nome_tratamento": nome_extraido, "nome_completo": "__FALLBACK__"}
                         break
 
                 # ── Ação ─────────────────────────────────────────────────────
