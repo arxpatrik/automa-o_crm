@@ -323,10 +323,17 @@ class AutomationApp:
                         break
 
                 # ── Ação ─────────────────────────────────────────────────────
-                if item_correspondente:
+                tentativa = 1
+                while tentativa <= 2:
+                    if not item_correspondente:
+                        self.log("[INFO] Sem match. Fechando e avançando.")
+                        self._fechar_card()
+                        indice_card += 1
+                        break
+
                     nome_comp = item_correspondente['nome_completo']
                     FALLBACK_NOME = "Patrik Mateus da Silva Dias"
-                    self.log(f"[PASSO] Transferindo para: {nome_comp}")
+                    self.log(f"[PASSO] Transferindo para: {nome_comp} (Tentativa {tentativa})")
                     
                     self.page.locator("#modal_negotiation_responsible_name").click()
                     self.log("[PASSO] Botão de transferência clicado.")
@@ -387,19 +394,54 @@ class AutomationApp:
                             self.page.wait_for_timeout(800)
                             alerta_impediu = True
                     except Exception as e:
-                        self.log(f"[ERRO] Falha ao fechar alerta: {e}")
+                        self.log(f"[ERRO] Falha ao tratar alerta: {e}")
 
+                    if alerta_impediu and tentativa == 1:
+                        self.log("[FALLBACK] Indo para tabQuotation e alterando dados para re-tentativa...")
+                        try:
+                            # Clica na aba de Cotação
+                            self.page.locator("#tabQuotation").click()
+                            self.page.wait_for_timeout(1000)
+                            
+                            # Modifica Placa
+                            placa_input = self.page.locator("#vhclPlates")
+                            placa_val = placa_input.input_value()
+                            if placa_val:
+                                novo_val = placa_val[:-1]
+                                placa_input.fill(novo_val)
+                                self.log(f"[PASSO] Placa alterada: {placa_val} -> {novo_val}")
+                                
+                            # Modifica Chassi
+                            chassi_input = self.page.locator("#vhclChassi")
+                            chassi_val = chassi_input.input_value()
+                            if chassi_val:
+                                novo_val = chassi_val[:-1]
+                                chassi_input.fill(novo_val)
+                                self.log(f"[PASSO] Chassi alterado: {chassi_val} -> {novo_val}")
+                            
+                            self.page.wait_for_timeout(500)
+                            
+                            # Clica em Salvar
+                            self.log("[PASSO] Clicando em Salvar alterações...")
+                            self.page.locator("#vhclEditSave").click()
+                            self.page.wait_for_timeout(2000)
+                            
+                            tentativa += 1
+                            continue # Volta para o início do while para tentar transferir de novo
+                        except Exception as e:
+                            self.log(f"[ERRO] Falha ao alterar dados: {e}")
+                            self._fechar_card()
+                            indice_card += 1
+                            break
+                    
+                    # Se chegou aqui, ou deu certo ou falhou a segunda tentativa
                     self._fechar_card()
-
                     if alerta_impediu:
+                        self.log("[AVISO] Transferência falhou em ambas as tentativas.")
                         indice_card += 1
                     else:
                         self.log("[INFO] Transferência OK. Card saiu da fila, índice mantido.")
-
-                else:
-                    self.log("[INFO] Sem match. Fechando e avançando.")
-                    self._fechar_card()
-                    indice_card += 1
+                    break
 
                 self.page.wait_for_timeout(1000)
 
